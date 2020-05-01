@@ -48,7 +48,9 @@ complexd *generate(int n)
             V[i].imag(rand_r(&seed));
             module += abs(V[i] * V[i]);
         }
-
+        if(omp_get_thread_num() == 0){
+            module = sqrt(module);
+        }
 #pragma omp for schedule(static)
         for (long long unsigned j = 0; j < qsize; j++)
         {
