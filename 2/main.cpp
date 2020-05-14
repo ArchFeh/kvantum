@@ -1,37 +1,43 @@
 #include <iostream>
-#include <iomanip>
-#include <stdio.h>
-#include <stdlib.h>
+#include <math.h>
+#include <vector>
 #include <complex>
-#include <assert.h>
-#include <cmath>
-#include <mpi.h>
-#include <sys/time.h>
+#include <string.h>
+#include <ctime>
+#include <stdlib.h>
+#include "mpi.h"
 
-using namespace std;
+typedef std::complex<float> complexd;
+typedef unsigned int uint;
 
-typedef complex<double> complexd;
+using std::cout;
+using std::endl;
+using std::vector;
 
-void OneQubitEvolution(complexd *in, complexd *out, complexd U[2][2], int nqubits, int q)
+int world_rank = 0, world_size;
+
+void OneQubitEvolution(vector<complexd> &in, vector<complexd> &out, complexd U[2][2], uint nqubits, uint q)
 {
-    int shift = nqubits - q;
-    int pow2q = 1 << (shift);
-    int N = 1 << nqubits;
+    uint shift = nqubits - q;
+    uint procNum = ((1 << (shift)) / in.size());
+
+    MPI_Sendrecv(
+        in.data(), in.size(), MPI_COMPLEX, procNum ^ world_rank, 0, out.data(), out.size(), MPI_COMPLEX, procNum ^ world_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+    for (int i = 0; i < in.size(); ++i)
     {
-        for (int i = 0; i < N; i++)
-        {
-            int i0 = i & ~pow2q;
-            int i1 = i | pow2q;
-            int iq = (i & pow2q) >> shift;
-            out[i] = U[iq][0] * in[i0] + U[iq][1] * in[i1];
-        }
+        if (!(world_rank & procNum))
+            out[i] = U[0][0] * in[i] + U[0][1] * out[i];
+        else
+            out[i] = U[1][0] * in[i] + U[1][1] * out[i];
     }
 }
 
-complexd *generate(int n)
+vector<complexd> generate(int n)
 {
-    long long unsigned qsize = 1LLU << n;
-    complexd *V = new complexd[qsize];
+    long long int qsize = pow(2, n) / world_size;
+
+    vector<complexd> V(qsize);
     double module = 0;
     time_t time_seed;
     time_seed = time(NULL);
@@ -39,13 +45,12 @@ complexd *generate(int n)
         unsigned int seed = (unsigned)time_seed;
         for (long long unsigned i = 0; i < qsize; i++)
         {
-            V[i].real(rand_r(&seed) ;
-            V[i].imag(rand_r(&seed) ;
+            float real = rand_r(&seed);
+            float imag = rand_r(&seed);
+            V[i] = complexd(real, imag);
             module += abs(V[i] * V[i]);
-        }
-        for (long long unsigned j = 0; j < qsize; j++)
-        {
-            V[j] /= module;
+            module = sqrt(module);
+            V[i] /= module;
         }
     }
     return V;
@@ -54,39 +59,46 @@ complexd *generate(int n)
 int main(int argc, char **argv)
 {
     MPI_Init(&argc, &argv);
-    int world_size;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-    int world_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
-    if (argc < 3)
+    if (argc != 3)
     {
-        cout << "Usage:" << argv[0] << " n(number of qubits) k(index qubits)";
-        return 1;
+        cout << "Usage:mpic++ -n N" << argv[0] << " n(number of qubits) k(index qubits)";
+        return -1;
     }
-    int n = atoi(argv[1]); // number of qubits
-    int k = atoi(argv[2]); // index qubit
-    if (n < k)
+    uint n = atoi(argv[1]);
+    if (n < 1 || n > 100)
+        return -1;
+
+    uint k = atoi(argv[2]);
+    if (k > n)
     {
         cout << "n need bigger than k";
-        exit(0);
+        return -1;
     }
 
-    struct timeval tvs, tve;
-    complexd *V = generate(n);
-    unsigned long long index = 1LLU << n;
-    complexd *W = new complexd[index];
-    complexd H[2][2];
-    H[0][0] = 1 / sqrt(2);
-    H[0][1] = 1 / sqrt(2);
-    H[1][0] = 1 / sqrt(2);
-    H[1][1] = -1 / sqrt(2);
-    gettimeofday(&tvs, NULL);
-    OneQubitEvolution(V, W, H, n, k);
-    gettimeofday(&tve, NULL);
-    cout << "n=" << n << " "
-         << "k=" << k << "\n";
-    cout << "Time:" << tve.tv_sec - tvs.tv_sec + (tve.tv_usec - tvs.tv_usec) / 1000000.0 << "s" << endl;
-    delete[] V;
-    delete[] W;
+    double startTime = MPI_Wtime();
+
+    long long int vectorLength = pow(2, n) / world_size;
+    vector<complexd> oldState = generate(n);
+    vector<complexd> newState(vectorLength);
+    complexd U[2][2];
+    U[0][0] = 1 / sqrt(2);
+    U[0][1] = 1 / sqrt(2);
+    U[1][0] = 1 / sqrt(2);
+    U[1][1] = -1 / sqrt(2);
+
+    OneQubitEvolution(oldState, newState, U, n, k);
+
+    double workTime = MPI_Wtime() - startTime;
+
+    double maxtime;
+    MPI_Reduce(&workTime, &maxtime, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+
+    if (world_rank == 0)
+        cout << "Time:" << maxtime << "s" << endl;
+
+    MPI_Finalize();
+    return 0;
 }
