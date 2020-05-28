@@ -21,15 +21,34 @@ void OneQubitEvolution(vector<complexd> &in, vector<complexd> &out, complexd U[2
     uint shift = nqubits - q;
     uint procNum = ((1 << (shift)) / in.size());
 
-    MPI_Sendrecv(
-        in.data(), in.size(), MPI_COMPLEX, procNum ^ world_rank, 0, out.data(), out.size(), MPI_COMPLEX, procNum ^ world_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-    for (int i = 0; i < in.size(); ++i)
+    if (world_rank != (procNum ^ world_rank))
     {
-        if (!(world_rank & procNum))
-            out[i] = U[0][0] * in[i] + U[0][1] * out[i];
+        MPI_Sendrecv(
+            in.data(), in.size(), MPI_COMPLEX, procNum ^ world_rank, 0, out.data(), out.size(), MPI_COMPLEX, procNum ^ world_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        if (world_rank > (procNum ^ world_rank))
+        {
+
+            for (int i = 0; i < in.size(); ++i)
+                out[i] = U[1][0] * in[i] + U[1][1] * out[i];
+        }
         else
-            out[i] = U[1][0] * in[i] + U[1][1] * out[i];
+        {
+            {
+                for (int i = 0; i < in.size(); ++i)
+                    out[i] = U[0][0] * in[i] + U[0][1] * out[i];
+            }
+        }
+    }
+    else
+    {
+
+        for (int i = 0; i < in.size(); ++i)
+        {
+            unsigned i0 = i & ~procNum;
+            unsigned i1 = i | procNum;
+            unsigned iq = (i & procNum) >> shift;
+            out[i] = U[iq][0] * in[i0] + U[iq][1] * in[i1];
+        }
     }
 }
 
